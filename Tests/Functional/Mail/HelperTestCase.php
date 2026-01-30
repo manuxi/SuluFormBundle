@@ -14,59 +14,93 @@ namespace Sulu\Bundle\FormBundle\Tests\Functional\Mail;
 use Doctrine\ORM\EntityManagerInterface;
 use Sulu\Bundle\FormBundle\Entity\Form;
 use Sulu\Bundle\FormBundle\Tests\Functional\Mail\Fixtures\LoadFormFixture;
-use Sulu\Bundle\PageBundle\Document\HomeDocument;
-use Sulu\Bundle\TestBundle\Testing\SuluTestCase;
-use Sulu\Component\DocumentManager\DocumentManagerInterface;
+use Sulu\Bundle\TestBundle\Testing\WebsiteTestCase;
+use Sulu\Content\Domain\Model\WorkflowInterface;
+use Sulu\Messenger\Infrastructure\Symfony\Messenger\FlushMiddleware\EnableFlushStamp;
+use Sulu\Page\Application\Message\ApplyWorkflowTransitionPageMessage;
+use Sulu\Page\Application\Message\CreatePageMessage;
+use Sulu\Page\Application\MessageHandler\CreatePageMessageHandler;
+use Sulu\Page\Domain\Model\Page;
 use Symfony\Bundle\FrameworkBundle\KernelBrowser;
+use Symfony\Component\Messenger\Envelope;
+use Symfony\Component\Messenger\Stamp\HandledStamp;
 
-class HelperTestCase extends SuluTestCase
+class HelperTestCase extends WebsiteTestCase
 {
-    /**
-     * @var KernelBrowser
-     */
-    protected $client;
+    protected static KernelBrowser $client;
 
-    /**
-     * @var EntityManagerInterface
-     */
-    protected $entityManager;
+    protected static EntityManagerInterface $entityManager;
 
-    protected function setUp(): void
+    protected static Page $homePage;
+
+    public static function setUpBeforeClass(): void
     {
-        $this->client = $this->createWebsiteClient();
-        $this->purgeDatabase();
-        $this->initPhpcr();
-        $this->entityManager = $this->getEntityManager();
+        self::$client = self::createWebsiteClient();
+        parent::setUpBeforeClass();
+        self::purgeDatabase();
+        self::$entityManager = self::getEntityManager();
 
         $fixture = new LoadFormFixture();
-        $fixture->load($this->entityManager);
+        $fixture->load(self::$entityManager);
 
-        $this->entityManager->flush();
-        $this->entityManager->clear();
+        self::$entityManager->flush();
+        self::$entityManager->clear();
     }
 
-    protected function updateHomePage(?Form $form = null): void
+    protected function createHomePage(?Form $form = null): Page
     {
-        /* @var $suluDocumentManager DocumentManagerInterface */
-        $suluDocumentManager = static::getContainer()->get('sulu_document_manager.document_manager');
+        $messageBus = self::getContainer()->get('sulu_message_bus');
 
-        /* @var $homePage HomeDocument */
-        $homePage = $suluDocumentManager->find('/cmf/sulu-io/contents');
-        $homePage->setResourceSegment('/');
-        $homePage->getStructure()->bind([
-            'form' => $form ? $form->getId() : null,
+        // Create page
+        $pageData = [
+            'template' => 'overview',
+            'title' => 'Homepage',
             'url' => '/',
-        ]);
+            'locale' => 'de',
+        ];
 
-        $suluDocumentManager->persist($homePage, 'de');
-        $suluDocumentManager->publish($homePage, 'de');
-        $suluDocumentManager->flush();
+        if ($form) {
+            $pageData['form'] = $form->getId();
+        }
+
+        $envelope = $messageBus->dispatch(
+            new Envelope(
+                new CreatePageMessage(
+                    webspaceKey: 'sulu-io',
+                    parentId: CreatePageMessageHandler::HOMEPAGE_PARENT_ID,
+                    data: $pageData
+                ),
+                [new EnableFlushStamp()]
+            )
+        );
+
+        /** @var HandledStamp[] $handledStamps */
+        $handledStamps = $envelope->all(HandledStamp::class);
+
+        /** @var Page $page */
+        $page = $handledStamps[0]->getResult();
+
+        // Publish the page
+        $messageBus->dispatch(
+            new Envelope(
+                new ApplyWorkflowTransitionPageMessage(
+                    identifier: ['uuid' => $page->getUuid()],
+                    locale: 'de',
+                    transitionName: WorkflowInterface::WORKFLOW_TRANSITION_PUBLISH
+                ),
+                [new EnableFlushStamp()]
+            )
+        );
+
+        self::$entityManager->clear();
+
+        return $page;
     }
 
     protected function doSendForm(Form $form): void
     {
-        $crawler = $this->client->request('GET', '/');
-        $this->assertHttpStatusCode(200, $this->client->getResponse());
+        $crawler = self::$client->request('GET', 'http://sulu.io/');
+        $this->assertHttpStatusCode(200, self::$client->getResponse());
 
         $formName = \sprintf('dynamic_form%d', $form->getId());
         $formSelector = \sprintf('form[name=%s]', $formName);
@@ -77,8 +111,8 @@ class HelperTestCase extends SuluTestCase
             $formName . '[email1]' => '',
         ]);
 
-        $this->client->enableProfiler();
-        $crawler = $this->client->submit($formElm);
+        self::$client->enableProfiler();
+        $crawler = self::$client->submit($formElm);
         $this->assertResponseStatusCodeSame(422);
 
         $formElm = $crawler->filter($formSelector)->first()->form([
@@ -86,7 +120,7 @@ class HelperTestCase extends SuluTestCase
             $formName . '[email1]' => 'jon@example.org',
         ]);
 
-        $this->client->submit($formElm);
+        self::$client->submit($formElm);
         $this->assertResponseStatusCodeSame(302);
         $this->assertResponseRedirects('?send=true');
     }
