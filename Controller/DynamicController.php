@@ -131,6 +131,10 @@ class DynamicController
     {
         $dynamic = $this->dynamicRepository->find($id);
 
+        if (!$dynamic) {
+            return new Response('', 204);
+        }
+
         $attachments = \array_filter(\array_values($dynamic->getFieldsByType(Dynamic::TYPE_ATTACHMENT)));
 
         foreach ($attachments as $mediaIds) {
