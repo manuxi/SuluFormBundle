@@ -169,6 +169,88 @@ class FormControllerTest extends SuluTestCase
         $this->assertSame((string) $response['id'], $activity->getResourceId());
     }
 
+    public function testPostTriggerCopyLocale(): void
+    {
+        $form = $this->createFullForm();
+
+        $this->client->request(
+            'POST',
+            '/admin/api/forms/' . $form->getId() . '?action=copy_locale&locale=en&dest[]=de&dest[]=nl'
+        );
+
+        $this->assertHttpStatusCode(200, $this->client->getResponse());
+        $response = \json_decode($this->client->getResponse()->getContent(), true);
+        $this->assertSame($form->getId(), $response['id']);
+        $this->assertFullForm($response);
+
+        foreach (['de', 'nl'] as $locale) {
+            $this->client->request('GET', '/admin/api/forms/' . $form->getId() . '?locale=' . $locale);
+
+            $this->assertHttpStatusCode(200, $this->client->getResponse());
+            $copy = \json_decode($this->client->getResponse()->getContent(), true);
+
+            $this->assertSame($form->getId(), $copy['id']);
+            $this->assertSame($locale, $copy['locale']);
+            $this->assertSame('Title', $copy['title']);
+            $this->assertSame('Submit Label', $copy['submitLabel']);
+            $this->assertSame('<p>Mail Text</p>', $copy['mailText']);
+            $this->assertCount(3, $copy['receivers']);
+            $this->assertCount(2, $copy['fields']);
+            $this->assertSame('email', $copy['fields'][0]['key']);
+            $this->assertSame('Placeholder', $copy['fields'][0]['placeholder']);
+            $this->assertSame('email1', $copy['fields'][1]['key']);
+            $this->assertSame('Default Value', $copy['fields'][1]['defaultValue']);
+        }
+
+        $activity = $this->em->getRepository(ActivityInterface::class)->findOneBy(['type' => 'translation_added']);
+        $this->assertNotNull($activity);
+        $this->assertSame((string) $form->getId(), $activity->getResourceId());
+    }
+
+    public function testPostTriggerCopyLocaleOverwritesExistingTranslation(): void
+    {
+        $form = $this->createFullForm();
+
+        $this->client->request('POST', '/admin/api/forms/' . $form->getId() . '?action=copy_locale&locale=en&dest[]=de');
+        $this->assertHttpStatusCode(200, $this->client->getResponse());
+
+        // save the form in "de" like the admin does: everything that was loaded, with another title
+        $this->client->request('GET', '/admin/api/forms/' . $form->getId() . '?locale=de');
+        $data = \json_decode($this->client->getResponse()->getContent(), true);
+        $data['title'] = 'Changed';
+
+        $this->client->request('PUT', '/admin/api/forms/' . $form->getId() . '?locale=de', $data);
+        $this->assertHttpStatusCode(200, $this->client->getResponse());
+        $this->assertSame('Changed', \json_decode($this->client->getResponse()->getContent(), true)['title']);
+
+        $this->client->request('POST', '/admin/api/forms/' . $form->getId() . '?action=copy_locale&locale=en&dest[]=de');
+        $this->assertHttpStatusCode(200, $this->client->getResponse());
+
+        $this->client->request('GET', '/admin/api/forms/' . $form->getId() . '?locale=de');
+        $copy = \json_decode($this->client->getResponse()->getContent(), true);
+
+        $this->assertSame('Title', $copy['title']);
+        $this->assertCount(2, $copy['fields']);
+    }
+
+    public function testPostTriggerCopyLocaleWithoutTarget(): void
+    {
+        $form = $this->createFullForm();
+
+        $this->client->request('POST', '/admin/api/forms/' . $form->getId() . '?action=copy_locale&locale=en');
+
+        $this->assertHttpStatusCode(400, $this->client->getResponse());
+    }
+
+    public function testPostTriggerCopyLocaleWithoutSourceTranslation(): void
+    {
+        $form = $this->createFullForm();
+
+        $this->client->request('POST', '/admin/api/forms/' . $form->getId() . '?action=copy_locale&locale=fr&dest[]=de');
+
+        $this->assertHttpStatusCode(404, $this->client->getResponse());
+    }
+
     public function testPutMinimal(): void
     {
         $form = $this->createFullForm();

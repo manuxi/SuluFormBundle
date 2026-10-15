@@ -194,6 +194,21 @@ class FormController extends AbstractRestController implements SecuredController
                     }
 
                     return $this->handleView($this->view($this->getApiEntity($copiedForm, $locale)));
+                case 'copy_locale':
+                    $dest = $request->query->all()['dest'] ?? [];
+                    $destLocales = \array_values(\array_filter(\is_array($dest) ? $dest : [$dest], '\is_string'));
+
+                    if ([] === $destLocales) {
+                        throw new RestException('No target locale given!');
+                    }
+
+                    try {
+                        $form = $this->formManager->copyLocale($id, $locale, $destLocales);
+                    } catch (FormNotFoundException $e) {
+                        throw new NotFoundHttpException(\sprintf('No form with id "%s" was found for the locale "%s"!', $e->getFormEntityId(), $locale), $e);
+                    }
+
+                    return $this->handleView($this->view($this->getApiEntity($form, $locale)));
                 default:
                     throw new RestException(\sprintf('Unrecognized action: "%s"', $action));
             }
